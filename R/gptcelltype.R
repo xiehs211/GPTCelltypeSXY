@@ -59,17 +59,41 @@ gptcelltype <- function(input, tissuename=NULL, model='gpt-4', topgenenumber = 1
       cid <- rep(1,length(input))
     }
     
+    max_attempts <- 3
     allres <- sapply(1:cutnum,function(i) {
       id <- which(cid==i)
       flag <- 0
+      attempts <- 0
+      last_error <- NULL
       while (flag == 0) {
-        k <- apiSXY::create_chat_completion(
-          model = model,
-          messages = list(list("role" = "user", "content" = paste0('Identify cell types of ',tissuename,' cells using the following markers separately for each\n row. Only provide the cell type name. Do not show numbers before the name.\n Some can be a mixture of multiple cell types.\n',paste(input[id],collapse = '\n'))))
-        )
+        attempts <- attempts + 1
+        k <- tryCatch({
+          apiSXY::create_chat_completion(
+            model = model,
+            messages = list(list("role" = "user", "content" = paste0('Identify cell types of ',tissuename,' cells using the following markers separately for each\n row. Only provide the cell type name. Do not show numbers before the name.\n Some can be a mixture of multiple cell types.\n',paste(input[id],collapse = '\n'))))
+          )
+        }, error = function(e) {
+          last_error <<- e
+          NULL
+        })
+        if (is.null(k)) {
+          if (attempts >= max_attempts) {
+            stop(sprintf('API请求连续失败（cluster: %s）: %s', paste(names(input)[id], collapse = ', '), conditionMessage(last_error)))
+          }
+          message(sprintf('API请求失败，第%d/%d次重试: %s', attempts, max_attempts, conditionMessage(last_error)))
+          Sys.sleep(2 ^ (attempts - 1))
+          next
+        }
         res <- strsplit(k$choices[,'message.content'],'\n')[[1]]
-        if (length(res)==length(id))
+        if (length(res)==length(id)) {
           flag <- 1
+        } else {
+          if (attempts >= max_attempts) {
+            stop(sprintf('API返回的行数(%d)与预期(%d)不符，且已超过最大重试次数。', length(res), length(id)))
+          }
+          message(sprintf('API返回行数与输入不一致，第%d/%d次重试...', attempts, max_attempts))
+          Sys.sleep(1)
+        }
       }
       names(res) <- names(input)[id]
       res
