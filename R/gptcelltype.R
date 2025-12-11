@@ -29,7 +29,7 @@
 #' return(prompt)
 
 gptcelltype <- function(input, tissuename=NULL, model='gpt-4', topgenenumber = 10) {
-  message("you are using GPTCelltype - powered by SXY")
+  message("you are using GPTCelltype - powered by yinyunapi")
   OPENAI_API_KEY <- Sys.getenv("OPENAI_API_KEY")
   if (OPENAI_API_KEY == "") {
     print("请设置你的OPENAI_API_KEY!")
