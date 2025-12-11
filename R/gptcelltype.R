@@ -60,17 +60,36 @@ gptcelltype <- function(input, tissuename=NULL, model='gpt-4', topgenenumber = 1
     }
     
     max_attempts <- 3
+
+    system_prompt <- paste0(
+      "You are a bioinformatics assistant. ",
+      "Return ONLY valid JSON like {\"",
+      paste(names(input), collapse = ":\"placeholder\", \""),
+      "\":\"placeholder\"}. ",
+      "Keys must match provided cluster names and values must be cell type names. ",
+      "No explanations, no additional text."
+    )
+
     allres <- sapply(1:cutnum,function(i) {
       id <- which(cid==i)
       flag <- 0
       attempts <- 0
       last_error <- NULL
+      user_prompt <- paste0(
+        "Identify cell types of ",tissuename," cells using the following markers separately for each\n row. ",
+        "Return JSON with the cluster names as keys and the cell type name as value. ",
+        "Only output JSON, nothing else.\n",
+        paste0(names(input)[id], ":",input[id],collapse = "\n")
+      )
       while (flag == 0) {
         attempts <- attempts + 1
         k <- tryCatch({
           apiSXY::create_chat_completion(
             model = model,
-            messages = list(list("role" = "user", "content" = paste0('Identify cell types of ',tissuename,' cells using the following markers separately for each\n row. Only provide the cell type name. Do not show numbers before the name.\n Some can be a mixture of multiple cell types.\n',paste(input[id],collapse = '\n'))))
+            messages = list(
+              list("role" = "system", "content" = system_prompt),
+              list("role" = "user", "content" = user_prompt)
+            )
           )
         }, error = function(e) {
           last_error <<- e
@@ -84,20 +103,35 @@ gptcelltype <- function(input, tissuename=NULL, model='gpt-4', topgenenumber = 1
           Sys.sleep(2 ^ (attempts - 1))
           next
         }
-        res <- strsplit(k$choices[,'message.content'],'\n')[[1]]
-        if (length(res)==length(id)) {
+        content_text <- k$choices[,'message.content']
+        cleaned_text <- gsub('```[a-zA-Z]*', '', content_text)
+        cleaned_text <- gsub('```', '', cleaned_text, fixed = TRUE)
+        parsed_json <- tryCatch({
+          jsonlite::fromJSON(cleaned_text)
+        }, error = function(e) NULL)
+        if (!is.null(parsed_json) && all(names(input)[id] %in% names(parsed_json))) {
+          res <- as.character(parsed_json[names(input)[id]])
+          flag <- 1
+          next
+        }
+        res <- strsplit(content_text,'\n')[[1]]
+        res <- trimws(res)
+        res <- res[nzchar(res)]
+        if (length(res) >= length(id)) {
+          res <- tail(res, length(id))
           flag <- 1
         } else {
           if (attempts >= max_attempts) {
-            stop(sprintf('API返回的行数(%d)与预期(%d)不符，且已超过最大重试次数。', length(res), length(id)))
+            stop(sprintf('API返回的有效行数(%d)少于所需(%d)。最后一次响应：%s', length(res), length(id), content_text))
           }
-          message(sprintf('API返回行数与输入不一致，第%d/%d次重试...', attempts, max_attempts))
+          message(sprintf('API返回行数(%d)与预期(%d)不符，第%d/%d次重试...', length(res), length(id), attempts, max_attempts))
           Sys.sleep(1)
         }
       }
       names(res) <- names(input)[id]
       res
     },simplify = F) 
+
     print('Note: It is always recommended to check the results returned by GPT-4 in case of\n AI hallucination, before going to down-stream analysis.')
     return(gsub(',$','',unlist(allres)))
   }
